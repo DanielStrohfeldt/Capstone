@@ -137,17 +137,19 @@ void * run_SERVER( void * id )
 		send( new_socket, hello, strlen(hello), 0 );
 		while( 1 )
 		{
-			sem_wait( &full_buffer );
-			send( new_socket, send_buffer, strlen( send_buffer ), 0 );
-			sem_post( &empty_buffer );
+			sem_wait( &full_buffer ); // Wait until IO operations have completed
+			send( new_socket, send_buffer, strlen( send_buffer ), 0 ); // send buffer
+			sem_post( &empty_buffer ); // Signal sent data
 		}
 	}
 
 	return NULL;
+	
 }	
 
 void * run_GPIO( void * id )
 {
+	int i = 0;	
 	bcm2835_init();		// Initialize GPIO
 	bcm2835_spi_begin();// Allow SPI Communications
 
@@ -161,6 +163,7 @@ void * run_GPIO( void * id )
 	while( 1 )
 	{
 		sem_wait( &empty_buffer ); // Wait on the empty buffer unlock semaphore
+		i ++ ;
 		// Fill the send buffer with data from GPIO pins
 		bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
 		// Copy the return data from the spi channel read into the buffer
@@ -174,32 +177,49 @@ void * run_GPIO( void * id )
 		// Copy the return data from GPIO pins into the buffer
 		
 		// If iteration is 10 Check DC Values
+		if ( i == 10 )
+		{
+			bcm2835_spi_chipSelect( BCM2835_SPI_CS1 ); // Select DC ADC
+			
+			bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
+			// Copy the reutrn data from spi bus into return buffer
+			
+			bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, 3 );
+			// Copy the reutrn data from spi bus into return buffer
+			
+			bcm2835_spi_chipSelect( BCM2835_SPI_CS0 ); // Select AC ADC
+			i = 0; // reset iteration counter
+		}
 		
-		// Copy the return data from SPI into the buffer
+		// Append timestamp to buffer
+		
 		sem_post( &full_buffer ); // Unlock the full_buffer semaphore
 	}
 
 	return NULL;
+
 }
 
 void * run_WRITER( void * id )
 {
+	// Thread for writing CSV Logs
 	sleep(1);
 	return NULL;
+
 }
 
 void cleanup( void )
 {
 
 	fprintf( stderr, "Cleaning Up\n" );
-	bcm2835_spi_end();
-	bcm2835_close();
+	bcm2835_spi_end(); // End spi communications
+	bcm2835_close(); // Close GPIO
 
 }
 
 void ctrlc_HANDLER( int signal )
 {
-
+	// Handle an interrupt from control c signal
 	cleanup();
 	exit(1);
 
