@@ -7,6 +7,7 @@
 #include <semaphore.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <bcm2835.h>
 
 // ******************* DEFINES ***************** //
 #define PORT 53211
@@ -16,20 +17,43 @@
 void * run_SERVER( void * id );
 void * run_GPIO( void * id );
 void * run_WRITER( void * id );
+void cleanup( void );
+void ctrlc_HANDLER( int signal );
 
 // ******************* GLOBALS ***************** //
 char recv_buffer[1024] = {0};
 char send_buffer[1024] = {0};
-sem_t lock;
+char CH0_CMD[3];
+char CH1_CMD[3];
+char spi_recv_buffer[3];
+sem_t empty_buffer;
+sem_t full_buffer;
+
+// ******************* CONSTANTS ************** //
+char * READ_CH0_CMD = "11010000";
+char * READ_CH1_CMD = "11110000";
 
 int main()
 {
+	atexit( cleanup ); // Clean Up Function
+	signal( SIGINT, ctrlc_HANDLER );
+	sem_init( &empty_buffer, 0, 1 ); // Create Semaphore Lock
+	sem_init( &full_buffer, 0, 0 ); // Create Semaphore Lock
 
-	sem_init( &lock, 0, 0 ); // Create Semaphore Lock
-
-	pthread_t threads[NUM_THREADS];
-	int ids[NUM_THREADS];
+	pthread_t threads[NUM_THREADS]; // Create Array of PTHREADS
+	int ids[NUM_THREADS]; // Array to Hold Ids of PTHREADS
 	int i;
+
+	char temp;
+	temp = strtol( READ_CH0_CMD, 0, 2 ); // Initialize SPI Commands
+	CH0_CMD[0] = temp;					 // Read From Channel 0
+	CH0_CMD[1] = '\0';
+	CH0_CMD[2] = '\0';
+
+	temp = strtol( READ_CH1_CMD, 0, 2 );
+	CH1_CMD[0] = temp;					 // Read From Channel 1
+	CH1_CMD[1] = '\0';
+	CH1_CMD[2] = '\0';
 
 	for ( i = 0; i < NUM_THREADS; i++ )
 	{
@@ -112,9 +136,13 @@ void * run_SERVER( void * id )
 		send( new_socket, hello, strlen(hello), 0 );
 		while( 1 )
 		{
-			sem_wait( &lock );
+			sem_wait( &full_buffer );
 			send( new_socket, send_buffer, strlen( send_buffer ), 0 );
-			sem_post( &lock );
+			valread = read( new_socket, recv_buffer, 1024 );
+			if ( valread )
+			{
+				sem_post( &empty_buffer );
+			}
 		}
 	}
 
@@ -123,13 +151,24 @@ void * run_SERVER( void * id )
 
 void * run_GPIO( void * id )
 {
+    bcm2835_init();		// Initialize GPIO
+	bcm2835_spi_begin();// Allow SPI Communications
+
+	bcm2835_spi_setBitOrder( BCM2835_SPI_BIT_ORDER_MSBFIRST ); // Setup SPI Bus
+	bcm2835_spi_setDataMode( BCM2835_SPI_MODE0 );
+	bcm2835_spi_setClockDivider( BCM2835_SPI_CLOCK_DIVIDER_2048 );
+	bcm2835_spi_chipSelect( BCM2835_SPI_CS0 );
+	bcm2835_spi_setChipSelectPolarity( BCM2835_SPI_CS0, LOW );
+
 	send_buffer[0] = '!';
 	while( 1 )
 	{
-		sem_post( &lock );
-		sleep(1);
-		sem_wait( &lock );
+		sem_wait( &empty_buffer ); // Wait on the empty buffer unlock semaphore
+		// Fill the send buffer with data from GPIO pins
+	    bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );	
+		sem_post( &full_buffer ); // Unlock the full_buffer semaphore
 	}
+
 	return NULL;
 }
 
@@ -138,3 +177,21 @@ void * run_WRITER( void * id )
 	sleep(1);
 	return NULL;
 }
+
+void cleanup( void )
+{
+
+	fprintf( stderr, "Cleaning Up\n" );
+	bcm2835_spi_end();
+	bcm2835_close();
+
+}
+
+void ctrlc_HANDLER( int signal )
+{
+
+	cleanup();
+	exit(1);
+
+}
+
