@@ -1,6 +1,7 @@
 // ******************* INCLUDES **************** //
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -138,11 +139,7 @@ void * run_SERVER( void * id )
 		{
 			sem_wait( &full_buffer );
 			send( new_socket, send_buffer, strlen( send_buffer ), 0 );
-			valread = read( new_socket, recv_buffer, 1024 );
-			if ( valread )
-			{
-				sem_post( &empty_buffer );
-			}
+			sem_post( &empty_buffer );
 		}
 	}
 
@@ -151,7 +148,7 @@ void * run_SERVER( void * id )
 
 void * run_GPIO( void * id )
 {
-    bcm2835_init();		// Initialize GPIO
+	bcm2835_init();		// Initialize GPIO
 	bcm2835_spi_begin();// Allow SPI Communications
 
 	bcm2835_spi_setBitOrder( BCM2835_SPI_BIT_ORDER_MSBFIRST ); // Setup SPI Bus
@@ -165,7 +162,20 @@ void * run_GPIO( void * id )
 	{
 		sem_wait( &empty_buffer ); // Wait on the empty buffer unlock semaphore
 		// Fill the send buffer with data from GPIO pins
-	    bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );	
+		bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
+		// Copy the return data from the spi channel read into the buffer
+		
+		// Get data from 2nd AC channel
+		bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, 3 );
+		// Copy the return data from the spi channel read into the buffer
+		
+		// Check GPIO Pins For Zero Crossings etc
+		
+		// Copy the return data from GPIO pins into the buffer
+		
+		// If iteration is 10 Check DC Values
+		
+		// Copy the return data from SPI into the buffer
 		sem_post( &full_buffer ); // Unlock the full_buffer semaphore
 	}
 

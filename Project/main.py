@@ -20,6 +20,6 @@ except Exception as e:
 network.connect_test_box.send( "Remote Desktop Connected" )
 while( 1 ):
     print( network.connect_test_box.recv(1024) )
-    network.connect_test_box.send( "1" )
+    #network.connect_test_box.send( "1" )
 
 
