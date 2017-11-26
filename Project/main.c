@@ -10,7 +10,7 @@
 
 // ******************* DEFINES ***************** //
 #define PORT 53211
-#define NUM_THREADS 1 
+#define NUM_THREADS 2 
 
 // ******************* PROTOTYPES ************** //
 void * run_SERVER( void * id );
@@ -106,12 +106,35 @@ void * run_SERVER( void * id )
 
 
 	valread = read( new_socket, recv_buffer, 1024 );
-	printf( "%s\n", buffer );
-	if ( recv_buffer == "Remote Desktop Connected" )
+	printf( "%s\n", recv_buffer );
+	if ( strcmp( recv_buffer, "Remote Desktop Connected" ) == 0 )
 	{
 		send( new_socket, hello, strlen(hello), 0 );
+		while( 1 )
+		{
+			sem_wait( &lock );
+			send( new_socket, send_buffer, strlen( send_buffer ), 0 );
+			sem_post( &lock );
+		}
 	}
 
 	return NULL;
 }	
 
+void * run_GPIO( void * id )
+{
+	send_buffer[0] = '!';
+	while( 1 )
+	{
+		sem_post( &lock );
+		sleep(1);
+		sem_wait( &lock );
+	}
+	return NULL;
+}
+
+void * run_WRITER( void * id )
+{
+	sleep(1);
+	return NULL;
+}

@@ -18,6 +18,7 @@ except Exception as e:
     exit(1);
 
 network.connect_test_box.send( "Remote Desktop Connected" )
-print( network.connect_test_box.recv(1024) )
+while( 1 ):
+    print( network.connect_test_box.recv(1024) )
 
 
