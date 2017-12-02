@@ -1,5 +1,14 @@
 import network
 
+print( """
+          __  ___      ____  ___    ___  ____    __  ___
+         / / / / | /| / /  |/  /___/ _ \/ __ \  /  |/  /
+        / /_/ /| |/ |/ / /|_/ /___/ ___/ /_/ / / /|_/ / 
+        \____/ |__/|__/_/  /_/   /_/   \___\_\/_/  /_/  
+                                                          
+                                                           """ )
+
+
 test_box_ip_address = "" 
 while len( test_box_ip_address.split( '.' ) ) != 4:
     test_box_ip_address = raw_input ( "Enter the IP address of the test device : " )
@@ -18,8 +27,8 @@ except Exception as e:
     exit(1);
 
 network.connect_test_box.send( "Remote Desktop Connected" )
+
 while( 1 ):
     print( network.connect_test_box.recv(1024) )
-    #network.connect_test_box.send( "1" )
-
+    network.connect_test_box.send("!")
 

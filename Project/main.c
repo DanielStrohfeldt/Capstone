@@ -14,6 +14,16 @@
 #define PORT 53211
 #define NUM_THREADS 2 
 
+// ******************* PIN OUT ***************** //
+#define ADC_VCC		 				RPI_BPLUS_GPIO_J8_22
+#define V_ZERO_CROSS 				RPI_BPLUS_GPIO_J8_11
+#define I_ZERO_CROSS 				RPI_BPLUS_GPIO_J8_13
+#define ACTIVE_LOW_SIGNAL_FAULT 	RPI_BPLUS_GPIO_J8_35
+#define ACTIVE_HIGH_SIGNAL_FAULT 	RPI_BPLUS_GPIO_J8_29
+#define OVER_VOLTAGE_SIGNAL 		RPI_BPLUS_GPIO_J8_31
+#define UNDER_VOLTAGE_SIGNAL 		RPI_BPLUS_GPIO_J8_33
+#define FAULT_RESET_SIGNAL 			RPI_BPLUS_GPIO_J8_32
+
 // ******************* PROTOTYPES ************** //
 void * run_SERVER( void * id );
 void * run_GPIO( void * id );
@@ -132,13 +142,17 @@ void * run_SERVER( void * id )
 
 	valread = read( new_socket, recv_buffer, 1024 );
 	printf( "%s\n", recv_buffer );
+
 	if ( strcmp( recv_buffer, "Remote Desktop Connected" ) == 0 )
 	{
 		send( new_socket, hello, strlen(hello), 0 );
 		while( 1 )
 		{
 			sem_wait( &full_buffer ); // Wait until IO operations have completed
+	
 			send( new_socket, send_buffer, strlen( send_buffer ), 0 ); // send buffer
+			read( new_socket, recv_buffer, 1024 );
+
 			sem_post( &empty_buffer ); // Signal sent data
 		}
 	}
@@ -149,34 +163,103 @@ void * run_SERVER( void * id )
 
 void * run_GPIO( void * id )
 {
-	int i = 0;	
-	bcm2835_init();		// Initialize GPIO
-	bcm2835_spi_begin();// Allow SPI Communications
+	// ****************** VARIABLE SETUP ********** //
+	int i = 0;
+	uint8_t v_cross, i_cross, act_low_sig_flt, act_hi_sig_flt;
+	uint8_t over_v_sig, under_v_sig;
+	// ******************************************** //
 
+
+
+	// ****************** GPIO SETUP *************** //
+	bcm2835_init();				// Initialize GPIO
+	bcm2835_spi_begin();		// Allow SPI Communications
+	// ********************************************* //
+
+
+
+	// ***************** 5V ADC SUPPLY ************* //
+	bcm2835_gpio_fsel( ADC_VCC, BCM2835_GPIO_FSEL_OUTP );
+	bcm2835_gpio_write( ADC_VCC, HIGH );
+	// ********************************************* //
+
+
+
+	// ***************** SIGNAL MONITOR SETUP  ************** //
+	bcm2835_gpio_fsel( V_ZERO_CROSS, BCM2835_GPIO_FSEL_INPT );
+	bcm2835_gpio_set_pud( V_ZERO_CROSS, BCM2835_GPIO_PUD_DWN );
+	bcm2835_gpio_fsel( I_ZERO_CROSS, BCM2835_GPIO_FSEL_INPT );
+	bcm2835_gpio_set_pud( I_ZERO_CROSS, BCM2835_GPIO_PUD_DWN );
+	bcm2835_gpio_fsel( ACTIVE_LOW_SIGNAL_FAULT, BCM2835_GPIO_FSEL_INPT );
+	bcm2835_gpio_set_pud( ACTIVE_LOW_SIGNAL_FAULT, BCM2835_GPIO_PUD_OFF );
+	bcm2835_gpio_fsel( ACTIVE_HIGH_SIGNAL_FAULT, BCM2835_GPIO_FSEL_INPT );
+	bcm2835_gpio_set_pud( ACTIVE_HIGH_SIGNAL_FAULT, BCM2835_GPIO_PUD_OFF );
+	bcm2835_gpio_fsel( OVER_VOLTAGE_SIGNAL, BCM2835_GPIO_FSEL_INPT );
+	bcm2835_gpio_set_pud( OVER_VOLTAGE_SIGNAL, BCM2835_GPIO_PUD_OFF );
+	bcm2835_gpio_fsel( UNDER_VOLTAGE_SIGNAL, BCM2835_GPIO_FSEL_INPT );
+	bcm2835_gpio_set_pud( UNDER_VOLTAGE_SIGNAL, BCM2835_GPIO_PUD_OFF );
+	bcm2835_gpio_fsel( FAULT_RESET_SIGNAL, BCM2835_GPIO_FSEL_OUTP );
+	// ****************************************************** // 
+
+
+	// ****************** SPI SETUP ***************** //
 	bcm2835_spi_setBitOrder( BCM2835_SPI_BIT_ORDER_MSBFIRST ); // Setup SPI Bus
 	bcm2835_spi_setDataMode( BCM2835_SPI_MODE0 );
 	bcm2835_spi_setClockDivider( BCM2835_SPI_CLOCK_DIVIDER_2048 );
 	bcm2835_spi_chipSelect( BCM2835_SPI_CS0 );
 	bcm2835_spi_setChipSelectPolarity( BCM2835_SPI_CS0, LOW );
+	// ********************************************** //
+
+
 
 	send_buffer[0] = '!';
 	while( 1 )
 	{
 		sem_wait( &empty_buffer ); // Wait on the empty buffer unlock semaphore
 		i ++ ;
+
+
 		// Fill the send buffer with data from GPIO pins
-		bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
+		//bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
+
+
+
 		// Copy the return data from the spi channel read into the buffer
 		
+
+
 		// Get data from 2nd AC channel
-		bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, 3 );
+		//bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, 3 );
+
+
+
 		// Copy the return data from the spi channel read into the buffer
 		
+	
+
 		// Check GPIO Pins For Zero Crossings etc
-		
+		v_cross = bcm2835_gpio_lev( V_ZERO_CROSS );						// get v zero cross
+		i_cross = bcm2835_gpio_lev( I_ZERO_CROSS );						// get i zero cross
+		act_low_sig_flt = bcm2835_gpio_lev( ACTIVE_LOW_SIGNAL_FAULT );	// get active low
+		act_hi_sig_flt = bcm2835_gpio_lev( ACTIVE_LOW_SIGNAL_FAULT );	// get active high
+		over_v_sig = bcm2835_gpio_lev( OVER_VOLTAGE_SIGNAL );			// get over v signal
+		under_v_sig = bcm2835_gpio_lev( UNDER_VOLTAGE_SIGNAL );			// get under v signal
+
+
+
+		// Print the values of the pin readings
+		fprintf( stderr, "Voltage Cross : %d\n", v_cross );
+		fprintf( stderr, "Current Cross : %d\n", i_cross );
+		fprintf( stderr, "Active Low Signal Fault : %d\n", act_low_sig_flt );
+		fprintf( stderr, "Active High Signal Fault : %d\n", act_hi_sig_flt );
+		fprintf( stderr, "Over Voltage Signal : %d\n", over_v_sig );
+		fprintf( stderr, "Under Voltage Signal : %d\n", under_v_sig );
+		fprintf( stderr, "Send Buffer : %s\n", spi_recv_buffer );
+
 		// Copy the return data from GPIO pins into the buffer
-		
+			
 		// If iteration is 10 Check DC Values
+
 		if ( i == 10 )
 		{
 			bcm2835_spi_chipSelect( BCM2835_SPI_CS1 ); // Select DC ADC
@@ -190,6 +273,8 @@ void * run_GPIO( void * id )
 			bcm2835_spi_chipSelect( BCM2835_SPI_CS0 ); // Select AC ADC
 			i = 0; // reset iteration counter
 		}
+
+		// memcpy( &send_buffer, &spi_recv_buffer, 3 );
 		
 		// Append timestamp to buffer
 		
@@ -212,6 +297,7 @@ void cleanup( void )
 {
 
 	fprintf( stderr, "Cleaning Up\n" );
+	bcm2835_gpio_write( ADC_VCC, LOW );
 	bcm2835_spi_end(); // End spi communications
 	bcm2835_close(); // Close GPIO
 
