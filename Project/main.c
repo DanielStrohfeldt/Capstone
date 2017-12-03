@@ -9,10 +9,14 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <bcm2835.h>
+// ********************************************* //
+
 
 // ******************* DEFINES ***************** //
 #define PORT 53211
 #define NUM_THREADS 2 
+// ********************************************* //
+
 
 // ******************* PIN OUT ***************** //
 #define ADC_VCC		 				RPI_BPLUS_GPIO_J8_22
@@ -23,6 +27,8 @@
 #define OVER_VOLTAGE_SIGNAL 		RPI_BPLUS_GPIO_J8_31
 #define UNDER_VOLTAGE_SIGNAL 		RPI_BPLUS_GPIO_J8_33
 #define FAULT_RESET_SIGNAL 			RPI_BPLUS_GPIO_J8_32
+// ******************************************** //
+
 
 // ******************* PROTOTYPES ************** //
 void * run_SERVER( void * id );
@@ -30,6 +36,10 @@ void * run_GPIO( void * id );
 void * run_WRITER( void * id );
 void cleanup( void );
 void ctrlc_HANDLER( int signal );
+void print_spi_buffer( char * spi_buf );
+char * char_to_binary( char character );
+// ********************************************* //
+
 
 // ******************* GLOBALS ***************** //
 char recv_buffer[1024] = {0};
@@ -39,10 +49,14 @@ char CH1_CMD[3];
 char spi_recv_buffer[3];
 sem_t empty_buffer;
 sem_t full_buffer;
+// ********************************************* //
+
 
 // ******************* CONSTANTS ************** //
 char * READ_CH0_CMD = "11010000";
 char * READ_CH1_CMD = "11110000";
+// ******************************************** //
+
 
 int main()
 {
@@ -170,12 +184,10 @@ void * run_GPIO( void * id )
 	// ******************************************** //
 
 
-
 	// ****************** GPIO SETUP *************** //
 	bcm2835_init();				// Initialize GPIO
 	bcm2835_spi_begin();		// Allow SPI Communications
 	// ********************************************* //
-
 
 
 	// ***************** 5V ADC SUPPLY ************* //
@@ -184,20 +196,19 @@ void * run_GPIO( void * id )
 	// ********************************************* //
 
 
-
 	// ***************** SIGNAL MONITOR SETUP  ************** //
 	bcm2835_gpio_fsel( V_ZERO_CROSS, BCM2835_GPIO_FSEL_INPT );
-	bcm2835_gpio_set_pud( V_ZERO_CROSS, BCM2835_GPIO_PUD_DWN );
+	bcm2835_gpio_set_pud( V_ZERO_CROSS, BCM2835_GPIO_PUD_DOWN );		// turn off
 	bcm2835_gpio_fsel( I_ZERO_CROSS, BCM2835_GPIO_FSEL_INPT );
-	bcm2835_gpio_set_pud( I_ZERO_CROSS, BCM2835_GPIO_PUD_DWN );
+	bcm2835_gpio_set_pud( I_ZERO_CROSS, BCM2835_GPIO_PUD_DOWN );		// turn off
 	bcm2835_gpio_fsel( ACTIVE_LOW_SIGNAL_FAULT, BCM2835_GPIO_FSEL_INPT );
-	bcm2835_gpio_set_pud( ACTIVE_LOW_SIGNAL_FAULT, BCM2835_GPIO_PUD_OFF );
+	bcm2835_gpio_set_pud( ACTIVE_LOW_SIGNAL_FAULT, BCM2835_GPIO_PUD_DOWN );
 	bcm2835_gpio_fsel( ACTIVE_HIGH_SIGNAL_FAULT, BCM2835_GPIO_FSEL_INPT );
-	bcm2835_gpio_set_pud( ACTIVE_HIGH_SIGNAL_FAULT, BCM2835_GPIO_PUD_OFF );
+	bcm2835_gpio_set_pud( ACTIVE_HIGH_SIGNAL_FAULT, BCM2835_GPIO_PUD_DOWN );
 	bcm2835_gpio_fsel( OVER_VOLTAGE_SIGNAL, BCM2835_GPIO_FSEL_INPT );
-	bcm2835_gpio_set_pud( OVER_VOLTAGE_SIGNAL, BCM2835_GPIO_PUD_OFF );
+	bcm2835_gpio_set_pud( OVER_VOLTAGE_SIGNAL, BCM2835_GPIO_PUD_DOWN );
 	bcm2835_gpio_fsel( UNDER_VOLTAGE_SIGNAL, BCM2835_GPIO_FSEL_INPT );
-	bcm2835_gpio_set_pud( UNDER_VOLTAGE_SIGNAL, BCM2835_GPIO_PUD_OFF );
+	bcm2835_gpio_set_pud( UNDER_VOLTAGE_SIGNAL, BCM2835_GPIO_PUD_DOWN );
 	bcm2835_gpio_fsel( FAULT_RESET_SIGNAL, BCM2835_GPIO_FSEL_OUTP );
 	// ****************************************************** // 
 
@@ -220,32 +231,30 @@ void * run_GPIO( void * id )
 
 
 		// Fill the send buffer with data from GPIO pins
-		//bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
-
-
+		bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
+		print_spi_buffer( spi_recv_buffer );
+		
+		// Check GPIO Pins For Zero Crossings etc
+		v_cross = bcm2835_gpio_lev( V_ZERO_CROSS );				// get v zero cross
+		i_cross = bcm2835_gpio_lev( I_ZERO_CROSS );				// get i zero cross
+		act_low_sig_flt = bcm2835_gpio_lev( ACTIVE_LOW_SIGNAL_FAULT );// get active low
 
 		// Copy the return data from the spi channel read into the buffer
 		
 
 
 		// Get data from 2nd AC channel
-		//bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, 3 );
-
-
-
+		bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, 3 );
+		print_spi_buffer( spi_recv_buffer );
 		// Copy the return data from the spi channel read into the buffer
-		
 	
 
 		// Check GPIO Pins For Zero Crossings etc
-		v_cross = bcm2835_gpio_lev( V_ZERO_CROSS );						// get v zero cross
-		i_cross = bcm2835_gpio_lev( I_ZERO_CROSS );						// get i zero cross
-		act_low_sig_flt = bcm2835_gpio_lev( ACTIVE_LOW_SIGNAL_FAULT );	// get active low
-		act_hi_sig_flt = bcm2835_gpio_lev( ACTIVE_LOW_SIGNAL_FAULT );	// get active high
-		over_v_sig = bcm2835_gpio_lev( OVER_VOLTAGE_SIGNAL );			// get over v signal
-		under_v_sig = bcm2835_gpio_lev( UNDER_VOLTAGE_SIGNAL );			// get under v signal
-
-
+		act_hi_sig_flt = bcm2835_gpio_lev( ACTIVE_LOW_SIGNAL_FAULT );// get active high
+		over_v_sig = bcm2835_gpio_lev( OVER_VOLTAGE_SIGNAL );	// get over v signal
+		under_v_sig = bcm2835_gpio_lev( UNDER_VOLTAGE_SIGNAL );	// get under v signal
+		
+		// Copy the return data from GPIO pins into the buffer
 
 		// Print the values of the pin readings
 		fprintf( stderr, "Voltage Cross : %d\n", v_cross );
@@ -254,9 +263,6 @@ void * run_GPIO( void * id )
 		fprintf( stderr, "Active High Signal Fault : %d\n", act_hi_sig_flt );
 		fprintf( stderr, "Over Voltage Signal : %d\n", over_v_sig );
 		fprintf( stderr, "Under Voltage Signal : %d\n", under_v_sig );
-		fprintf( stderr, "Send Buffer : %s\n", spi_recv_buffer );
-
-		// Copy the return data from GPIO pins into the buffer
 			
 		// If iteration is 10 Check DC Values
 
@@ -311,3 +317,54 @@ void ctrlc_HANDLER( int signal )
 
 }
 
+void print_spi_buffer( char * spi_buf )
+{
+	int spi_buf_size = 3;			// length of char buffer
+	int char_size = 8;
+	int x, y;
+	char * binary_data;
+		
+	fprintf( stderr, "\n" );
+
+	for ( x = 0; x < spi_buf_size; x ++ )
+	{
+
+		binary_data = char_to_binary( spi_buf[x] );
+
+		for ( y = 0; y < char_size; y ++ )
+		{
+
+			fprintf( stderr, "%c", binary_data[y] );
+
+		}
+		
+		fprintf( stderr, "\n" );
+	}
+		
+	fprintf( stderr, "\n" );
+
+}
+
+char * char_to_binary( char character )
+{
+	int char_size = 8;
+	int x;
+	char * binary_data = malloc( char_size * sizeof( char ) );
+
+	for ( x = 0; x < char_size; x ++ )
+	{
+
+		if ( character >> x & 1 )
+		{	
+			binary_data[x] = '1';
+		}
+		else
+		{
+			binary_data[x] = '0';
+		}
+
+	}
+
+	return binary_data;
+
+}
