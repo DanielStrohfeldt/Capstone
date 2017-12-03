@@ -15,6 +15,7 @@
 // ******************* DEFINES ***************** //
 #define PORT 53211
 #define NUM_THREADS 2 
+#define CHAR_SIZE 8
 // ********************************************* //
 
 
@@ -38,6 +39,7 @@ void cleanup( void );
 void ctrlc_HANDLER( int signal );
 void print_spi_buffer( char * spi_buf );
 char * char_to_binary( char character );
+char * mask_spi_buffer( char * spi_buf );
 // ********************************************* //
 
 
@@ -47,6 +49,7 @@ char send_buffer[1024] = {0};
 char CH0_CMD[3];
 char CH1_CMD[3];
 char spi_recv_buffer[3];
+char * binary_data = malloc( CHAR_SIZE * sizeof( char ) );
 sem_t empty_buffer;
 sem_t full_buffer;
 // ********************************************* //
@@ -181,6 +184,7 @@ void * run_GPIO( void * id )
 	int i = 0;
 	uint8_t v_cross, i_cross, act_low_sig_flt, act_hi_sig_flt;
 	uint8_t over_v_sig, under_v_sig;
+	char * received_buffer;
 	// ******************************************** //
 
 
@@ -232,7 +236,8 @@ void * run_GPIO( void * id )
 
 		// Fill the send buffer with data from GPIO pins
 		bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
-		print_spi_buffer( spi_recv_buffer );
+		received_buffer = mask_spi_buffer( spi_recv_buffer );
+		print_spi_buffer( received_buffer );
 		
 		// Check GPIO Pins For Zero Crossings etc
 		v_cross = bcm2835_gpio_lev( V_ZERO_CROSS );				// get v zero cross
@@ -245,7 +250,8 @@ void * run_GPIO( void * id )
 
 		// Get data from 2nd AC channel
 		bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, 3 );
-		print_spi_buffer( spi_recv_buffer );
+		received_buffer = mask_spi_buffer( spi_recv_buffer );
+		print_spi_buffer( received_buffer );
 		// Copy the return data from the spi channel read into the buffer
 	
 
@@ -317,24 +323,40 @@ void ctrlc_HANDLER( int signal )
 
 }
 
+char * mask_spi_buffer( char * spi_buf )
+{
+
+	char * new_buffer = malloc( 3 * sizeof( char ) );
+	char mask_byte_0 = 0x1F;	// 00011111
+	char mask_byte_1 = 0xFC;	// 11111100
+	char mask_byte_2 = 0x00;	// 00000000
+
+	new_buffer[0] = spi_buf[0] & mask_byte_0;
+	new_buffer[1] = spi_buf[1] & mask_byte_1;
+	new_buffer[2] = spi_buf[2] & mask_byte_2;
+
+	return new_buffer;
+
+}
+
 void print_spi_buffer( char * spi_buf )
 {
 	int spi_buf_size = 3;			// length of char buffer
 	int char_size = 8;
 	int x, y;
-	char * binary_data;
+	char * data;
 		
 	fprintf( stderr, "\n" );
 
 	for ( x = 0; x < spi_buf_size; x ++ )
 	{
 
-		binary_data = char_to_binary( spi_buf[x] );
+		data = char_to_binary( spi_buf[x] );
 
 		for ( y = 0; y < char_size; y ++ )
 		{
 
-			fprintf( stderr, "%c", binary_data[y] );
+			fprintf( stderr, "%c", data[y] );
 
 		}
 		
@@ -349,7 +371,6 @@ char * char_to_binary( char character )
 {
 	int char_size = 8;
 	int x;
-	char * binary_data = malloc( char_size * sizeof( char ) );
 
 	for ( x = 0; x < char_size; x ++ )
 	{
