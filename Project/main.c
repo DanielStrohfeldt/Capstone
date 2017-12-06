@@ -1,4 +1,5 @@
 // ******************* INCLUDES **************** //
+#include <time.h>
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
@@ -15,6 +16,12 @@
 // ******************* DEFINES ***************** //
 #define PORT 53211
 #define NUM_THREADS 2 
+#define CHAR_SIZE 8
+#define BYTE_MASK_0 0x00
+#define BYTE_MASK_1 0x00
+#define BYTE_MASK_2 0xFF
+#define BYTE_MASK_3 0xF0
+#define SPI_BUFFER_SIZE 4
 #define CHAR_SIZE 8
 // ********************************************* //
 
@@ -39,30 +46,38 @@ void cleanup( void );
 void ctrlc_HANDLER( int signal );
 void print_spi_buffer( char * spi_buf );
 char * char_to_binary( char character );
-char * mask_spi_buffer( char * spi_buf );
+void mask_swap_spi_buffer( char * spi_buf );
+void spi_to_binary( char * spi_buf );
+void copy_spi_buffer( char * spi_buf );
+void copy_digital( int pin_val );
 // ********************************************* //
 
 
 // ******************* GLOBALS ***************** //
 char recv_buffer[1024] = {0};
 char send_buffer[1024] = {0};
-char CH0_CMD[3];
-char CH1_CMD[3];
-char spi_recv_buffer[3];
-char * binary_data = malloc( CHAR_SIZE * sizeof( char ) );
+char CH0_CMD[4];
+char CH1_CMD[4];
+char spi_recv_buffer[4];
+char quantized_spi_result[16];
 sem_t empty_buffer;
 sem_t full_buffer;
+struct timeval time_now;
+uint64_t current_time_microseconds;
+uint32_t send_buffer_length;
 // ********************************************* //
 
 
 // ******************* CONSTANTS ************** //
-char * READ_CH0_CMD = "11010000";
-char * READ_CH1_CMD = "11110000";
+char * READ_CH0_CMD = "11000000";
+char * READ_CH1_CMD = "11100000";
+char * OUTPUT_FILE = "data_log.csv";
+char COMMA = ',';
 // ******************************************** //
 
 
-int main()
-{
+int main() {
+
 	atexit( cleanup ); // Clean Up Function
 	signal( SIGINT, ctrlc_HANDLER );
 	sem_init( &empty_buffer, 0, 1 ); // Create Semaphore Lock
@@ -77,11 +92,13 @@ int main()
 	CH0_CMD[0] = temp;					 // Read From Channel 0
 	CH0_CMD[1] = '\0';
 	CH0_CMD[2] = '\0';
+	CH0_CMD[3] = '\0';
 
 	temp = strtol( READ_CH1_CMD, 0, 2 );
 	CH1_CMD[0] = temp;					 // Read From Channel 1
 	CH1_CMD[1] = '\0';
 	CH1_CMD[2] = '\0';
+	CH1_CMD[3] = '\0';
 
 	for ( i = 0; i < NUM_THREADS; i++ )
 	{
@@ -184,7 +201,9 @@ void * run_GPIO( void * id )
 	int i = 0;
 	uint8_t v_cross, i_cross, act_low_sig_flt, act_hi_sig_flt;
 	uint8_t over_v_sig, under_v_sig;
-	char * received_buffer;
+	char dc_voltage[4];
+	char dc_current[4];
+	char * timestamp;
 	// ******************************************** //
 
 
@@ -231,27 +250,28 @@ void * run_GPIO( void * id )
 	while( 1 )
 	{
 		sem_wait( &empty_buffer ); // Wait on the empty buffer unlock semaphore
-		i ++ ;
+		send_buffer_length = 0;
 
 
 		// Fill the send buffer with data from GPIO pins
-		bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
-		received_buffer = mask_spi_buffer( spi_recv_buffer );
-		print_spi_buffer( received_buffer );
+		bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, SPI_BUFFER_SIZE );
+		mask_swap_spi_buffer( spi_recv_buffer );
+		copy_spi_buffer( spi_recv_buffer );
 		
 		// Check GPIO Pins For Zero Crossings etc
 		v_cross = bcm2835_gpio_lev( V_ZERO_CROSS );				// get v zero cross
 		i_cross = bcm2835_gpio_lev( I_ZERO_CROSS );				// get i zero cross
 		act_low_sig_flt = bcm2835_gpio_lev( ACTIVE_LOW_SIGNAL_FAULT );// get active low
-
+		gettimeofday( &time_now, NULL );
+		current_time_microseconds = time_now.tv_sec*(uint64_t)1000000 + time_now.tv_usec;
 		// Copy the return data from the spi channel read into the buffer
 		
 
 
 		// Get data from 2nd AC channel
-		bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, 3 );
-		received_buffer = mask_spi_buffer( spi_recv_buffer );
-		print_spi_buffer( received_buffer );
+		bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, SPI_BUFFER_SIZE );
+		mask_swap_spi_buffer( spi_recv_buffer );
+		copy_spi_buffer( spi_recv_buffer );
 		// Copy the return data from the spi channel read into the buffer
 	
 
@@ -261,6 +281,13 @@ void * run_GPIO( void * id )
 		under_v_sig = bcm2835_gpio_lev( UNDER_VOLTAGE_SIGNAL );	// get under v signal
 		
 		// Copy the return data from GPIO pins into the buffer
+		copy_digital( v_cross );
+		copy_digital( i_cross );
+		copy_digital( act_low_sig_flt );
+		copy_digital( act_hi_sig_flt );
+		copy_digital( over_v_sig );
+		copy_digital( under_v_sig );
+
 
 		// Print the values of the pin readings
 		fprintf( stderr, "Voltage Cross : %d\n", v_cross );
@@ -269,27 +296,33 @@ void * run_GPIO( void * id )
 		fprintf( stderr, "Active High Signal Fault : %d\n", act_hi_sig_flt );
 		fprintf( stderr, "Over Voltage Signal : %d\n", over_v_sig );
 		fprintf( stderr, "Under Voltage Signal : %d\n", under_v_sig );
-			
+		fprintf( stderr, "Time : %d\n", current_time_microseconds );	
 		// If iteration is 10 Check DC Values
 
-		if ( i == 10 )
+		if ( i == 0 )
 		{
 			bcm2835_spi_chipSelect( BCM2835_SPI_CS1 ); // Select DC ADC
 			
-			bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, 3 );
+			bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, SPI_BUFFER_SIZE );
 			// Copy the reutrn data from spi bus into return buffer
+			mask_swap_spi_buffer( spi_recv_buffer );
+		    strncpy( dc_voltage, spi_recv_buffer, 4 );	
 			
-			bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, 3 );
+			bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, SPI_BUFFER_SIZE );
 			// Copy the reutrn data from spi bus into return buffer
+			mask_swap_spi_buffer( spi_recv_buffer );
+		    strncpy( dc_current, spi_recv_buffer, 4 );	
 			
 			bcm2835_spi_chipSelect( BCM2835_SPI_CS0 ); // Select AC ADC
-			i = 0; // reset iteration counter
+			i = 10; // reset iteration counter
 		}
 
-		// memcpy( &send_buffer, &spi_recv_buffer, 3 );
+		copy_spi_buffer( dc_voltage );
+		copy_spi_buffer( dc_current );
 		
 		// Append timestamp to buffer
 		
+		i --;
 		sem_post( &full_buffer ); // Unlock the full_buffer semaphore
 	}
 
@@ -300,7 +333,9 @@ void * run_GPIO( void * id )
 void * run_WRITER( void * id )
 {
 	// Thread for writing CSV Logs
-	sleep(1);
+	
+	//out_file = fopen( OUTPUT_FILE, "a" );    // Open the file
+
 	return NULL;
 
 }
@@ -323,44 +358,75 @@ void ctrlc_HANDLER( int signal )
 
 }
 
-char * mask_spi_buffer( char * spi_buf )
+void mask_swap_spi_buffer( char * spi_buf )
 {
+	char temp;
+	spi_buf[0] = spi_buf[0] & BYTE_MASK_0;
+	spi_buf[1] = spi_buf[1] & BYTE_MASK_1;
+	spi_buf[2] = spi_buf[2] & BYTE_MASK_2;
+	spi_buf[3] = spi_buf[3] & BYTE_MASK_3;
 
-	char * new_buffer = malloc( 3 * sizeof( char ) );
-	char mask_byte_0 = 0x1F;	// 00011111
-	char mask_byte_1 = 0xFC;	// 11111100
-	char mask_byte_2 = 0x00;	// 00000000
+	temp = spi_buf[2];			// swap so data is ordered
+	spi_buf[2] = spi_buf[3];
+	spi_buf[3] = temp;
 
-	new_buffer[0] = spi_buf[0] & mask_byte_0;
-	new_buffer[1] = spi_buf[1] & mask_byte_1;
-	new_buffer[2] = spi_buf[2] & mask_byte_2;
+}
 
-	return new_buffer;
+void copy_spi_buffer( char * spi_buf )
+{
+	uint32_t current_index = send_buffer_length;
+	uint32_t x,y;
+	char * data;
+	
+	for ( x = 0; x < SPI_BUFFER_SIZE; x ++ )
+	{
+
+		data = char_to_binary( spi_buf[x] );
+		if ( x == 0 | x == 1 )
+		{
+			x = x;
+		}
+		else
+		{
+
+			for ( y = 0; y < CHAR_SIZE; y ++ )
+			{
+				send_buffer[send_buffer_length] = data[y];
+				send_buffer_length ++;
+			}
+		}
+	}
+
+	send_buffer[send_buffer_length] = COMMA;
+	send_buffer_length ++;
 
 }
 
 void print_spi_buffer( char * spi_buf )
 {
-	int spi_buf_size = 3;			// length of char buffer
-	int char_size = 8;
 	int x, y;
 	char * data;
 		
 	fprintf( stderr, "\n" );
 
-	for ( x = 0; x < spi_buf_size; x ++ )
+	for ( x = 0; x < SPI_BUFFER_SIZE; x ++ )
 	{
 
 		data = char_to_binary( spi_buf[x] );
-
-		for ( y = 0; y < char_size; y ++ )
+		if ( x == 0 | x == 1 )
+		{
+			x = x;
+		}
+		else
 		{
 
-			fprintf( stderr, "%c", data[y] );
+			for ( y = 0; y < CHAR_SIZE; y ++ )
+			{
 
+				fprintf( stderr, "%c", data[y] );
+
+			}
 		}
-		
-		fprintf( stderr, "\n" );
 	}
 		
 	fprintf( stderr, "\n" );
@@ -369,10 +435,10 @@ void print_spi_buffer( char * spi_buf )
 
 char * char_to_binary( char character )
 {
-	int char_size = 8;
 	int x;
-
-	for ( x = 0; x < char_size; x ++ )
+	char * binary_data = malloc( CHAR_SIZE * sizeof( char ) );
+	// LSB of char first MSB of SPI first
+	for ( x = 0; x < CHAR_SIZE; x ++ )
 	{
 
 		if ( character >> x & 1 )
@@ -389,3 +455,50 @@ char * char_to_binary( char character )
 	return binary_data;
 
 }
+
+void spi_to_binary( char * spi_buf )
+{
+	char lsb = spi_buf[2];
+	char msb = spi_buf[3];
+	int x;
+
+	for ( x = 0; x < CHAR_SIZE * 2; x ++ )
+	{
+
+		if ( x > 7 )
+		{
+			// Use lsb
+			x = x;
+		}
+
+		else
+		{
+			// Use msb
+			x = x;
+		}
+
+	}
+
+}
+
+void copy_digital( int pin_val )
+{
+	if ( pin_val )
+	{
+		
+		send_buffer[send_buffer_length] = '1';
+
+	}
+	else
+	{
+
+		send_buffer[send_buffer_length] = '0';
+
+	}
+
+	send_buffer_length ++;
+	send_buffer[send_buffer_length] = COMMA;
+	send_buffer_length ++;
+
+}
+
