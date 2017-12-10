@@ -50,12 +50,14 @@ void mask_swap_spi_buffer( char * spi_buf );
 void spi_to_binary( char * spi_buf );
 void copy_spi_buffer( char * spi_buf );
 void copy_digital( int pin_val );
+void copy_timestamp( uint64_t timestamp );
 // ********************************************* //
 
 
 // ******************* GLOBALS ***************** //
 char recv_buffer[1024] = {0};
-char send_buffer[1024] = {0};
+char send_buffer[8192] = {0};
+char copy_buffer[8192] = {0};
 char write_buffer_0[1024] = {0};
 char write_buffer_1[1024] = {0};
 char CH0_CMD[4];
@@ -87,11 +89,11 @@ int main() {
 
 	atexit( cleanup ); // Clean Up Function
 	signal( SIGINT, ctrlc_HANDLER );
-	sem_init( &empty_csv_buffer, 0, 1 ); // Create Semaphore Lock
-	sem_init( &full_csv_buffer, 0, 0 ); // Create Semaphore Lock
-	sem_init( &empty_server_buffer, 0, 1 ); // Create Semaphore Lock
-	sem_init( &full_server_buffer, 0, 0 ); // Create Semaphore Lock
-	sem_init( &connect_server, 0, 0 ); // Create Semaphore Lock
+	sem_init( &empty_csv_buffer, 0, 1 ); 		// Create Semaphore Lock
+	sem_init( &full_csv_buffer, 0, 0 ); 		// Create Semaphore Lock
+	sem_init( &empty_server_buffer, 0, 0 ); 	// Create Semaphore Lock
+	sem_init( &full_server_buffer, 0, 0 ); 		// Create Semaphore Lock
+	sem_init( &connect_server, 0, 0 ); 			// Create Semaphore Lock
 
 	pthread_t threads[NUM_THREADS]; // Create Array of PTHREADS
 	int ids[NUM_THREADS]; // Array to Hold Ids of PTHREADS
@@ -138,10 +140,12 @@ int main() {
 
 }
 
+//****************************************** SERVER THREAD *************************************//
 void * run_SERVER( void * id )
 {
 	int server_fd, new_socket, valread;
 	struct sockaddr_in address;
+	int copy_buffer_count = 0;
 	int opt = 1;
 	int addrlen = sizeof( address );
 	
@@ -204,11 +208,29 @@ void * run_SERVER( void * id )
 
 			OUTPUT_FILE = fopen( OUTPUT_FILENAME, "r" );
 
-			while( fgets( send_buffer, 1024, OUTPUT_FILE ) )
+			while( fgets( copy_buffer, 8192, OUTPUT_FILE ) != NULL )
 			{
-				fprintf( stderr, "CSV LINE : %s\n", send_buffer );
-				send( new_socket, send_buffer, strlen( send_buffer ), 0 ); // send buffer
-				read( new_socket, recv_buffer, 1024 ); // Get acknowledge
+					
+				if ( copy_buffer_count < 20 )
+				{
+					if ( copy_buffer_count == 0 )
+					{
+						fprintf( stderr, "COPYING SEND BUF\n" );
+						strcpy( send_buffer, copy_buffer );
+					}
+					else
+					{	
+						fprintf( stderr, "CONCATENATING BUFS\n" );
+						strcat( send_buffer, copy_buffer );
+					}
+					copy_buffer_count++;
+				}
+				else
+				{
+					copy_buffer_count = 0;
+					send( new_socket, send_buffer, strlen( send_buffer ), 0 ); // send buffer
+					read( new_socket, recv_buffer, 1024 ); // Get acknowledge
+				}
 			}
 			
 			fclose( OUTPUT_FILE );
@@ -220,7 +242,9 @@ void * run_SERVER( void * id )
 	return NULL;
 	
 }	
+//********************************************************************************************//
 
+//****************************************** GPIO THREAD *************************************//
 void * run_GPIO( void * id )
 {
 	sem_wait( &connect_server );
@@ -284,8 +308,7 @@ void * run_GPIO( void * id )
 		sem_wait( &empty_csv_buffer ); // Wait on the empty buffer unlock semaphore
 		send_buffer_length = 0;
 
-
-		// Fill the send buffer with data from GPIO pins
+		//*************************** READ AC VOLTAGE, CURRENT, ZERO CROSS ***********************//	
 		bcm2835_spi_transfernb( CH0_CMD, spi_recv_buffer, SPI_BUFFER_SIZE ); // read AC Voltage
 		mask_swap_spi_buffer( spi_recv_buffer );
 		strncpy( ac_voltage, spi_recv_buffer, 4 );	
@@ -296,23 +319,11 @@ void * run_GPIO( void * id )
 		gettimeofday( &time_now, NULL ); 						// get timestamp
 		current_microseconds = time_now.tv_sec*(uint64_t)1000000 + time_now.tv_usec - start_microseconds;
 		
-
-
 		// Get data from 2nd AC channel
-		bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, SPI_BUFFER_SIZE );
+		bcm2835_spi_transfernb( CH1_CMD, spi_recv_buffer, SPI_BUFFER_SIZE ); // read AC Current
 		mask_swap_spi_buffer( spi_recv_buffer );
 		strncpy( ac_voltage, spi_recv_buffer, 4 );	
-
-		
-		// Print the values of the pin readings
-/*		fprintf( stderr, "Voltage Cross : %d\n", v_cross );
-		fprintf( stderr, "Current Cross : %d\n", i_cross );
-		fprintf( stderr, "Active Low Signal Fault : %d\n", act_low_sig_flt );
-		fprintf( stderr, "Active High Signal Fault : %d\n", act_hi_sig_flt );
-		fprintf( stderr, "Over Voltage Signal : %d\n", over_v_sig );
-		fprintf( stderr, "Under Voltage Signal : %d\n", under_v_sig );
-		fprintf( stderr, "Time : %d\n", current_time_microseconds );	
-*/		// If iteration is 10 Check DC Values
+		//****************************************************************************************//	
 
 		if ( i == 0 )
 		{
@@ -326,7 +337,7 @@ void * run_GPIO( void * id )
 			mask_swap_spi_buffer( spi_recv_buffer );
 		    strncpy( dc_current, spi_recv_buffer, 4 );	
 			
-			bcm2835_spi_chipSelect( BCM2835_SPI_CS0 ); // Select AC ADC
+			bcm2835_spi_chipSelect( BCM2835_SPI_CS0 ); // Reselect AC ADC
 			//*****************************************************************************//
 			
 			//*************************** READ FAULT CONDITIONS ***************************//	
@@ -341,7 +352,6 @@ void * run_GPIO( void * id )
 		}
 		
 		//******************************** COPY DATA TO THE BUFFER *********************//
-		// Copy the return data from GPIO pins into the buffer
 		copy_digital( v_cross );
 		copy_digital( i_cross );
 		copy_digital( act_low_sig_flt );
@@ -352,19 +362,19 @@ void * run_GPIO( void * id )
 		copy_spi_buffer( ac_current );
 		copy_spi_buffer( dc_voltage );
 		copy_spi_buffer( dc_current );
-		// Append timestamp to buffer
-		
+		copy_timestamp( current_microseconds ); 
 		//*******************************************************************************//
 		
-		
-		i --;
+		i--;
 		sem_post( &full_csv_buffer ); // Unlock the full_buffer semaphore
 	}
 
 	return NULL;
 
 }
+//*******************************************************************************************//
 
+//****************************************** CSV WRITER THREAD *************************************//
 void * run_WRITER( void * id )
 {
 	//********************************* OPEN THE OUTPUT FILE ****************************//
@@ -375,11 +385,12 @@ void * run_WRITER( void * id )
 	{
 		sem_wait( &full_csv_buffer ); // Wait until IO operations have completed
 
-		fwrite( send_buffer, sizeof( send_buffer[0] ), send_buffer_length, OUTPUT_FILE );	
+		fwrite( send_buffer, sizeof( send_buffer[0] ), send_buffer_length, OUTPUT_FILE );
+
 		fputc( '\n', OUTPUT_FILE );
 		
 		//**************************** CHECK COUNTER *****************************//
-		if ( counter == 324000 )
+		if ( counter == 32400 )
 		{
 			fclose( OUTPUT_FILE );
 			fprintf( stderr, "CSV FILE TO BE TRANSFERRED\n" );	
@@ -404,11 +415,12 @@ void * run_WRITER( void * id )
 
 	return NULL;
 }
+//************************************************************************************************//
+
 
 void cleanup( void )
 {
 
-	fprintf( stderr, "CLEANING UP\n" );
 	bcm2835_gpio_write( ADC_VCC, LOW );
 	bcm2835_spi_end(); // End spi communications
 	bcm2835_close(); // Close GPIO
@@ -418,8 +430,8 @@ void cleanup( void )
 
 void ctrlc_HANDLER( int signal )
 {
-	// Handle an interrupt from control c signal
-	exit(1);
+	fprintf( stderr, "CTRL - C ENCOUNTERED : CLEANING UP\n" );
+	exit(1);	// Handle an interrupt from control c signal
 
 }
 
@@ -440,7 +452,7 @@ void mask_swap_spi_buffer( char * spi_buf )
 void copy_spi_buffer( char * spi_buf )
 {
 	uint32_t current_index = send_buffer_length;
-	uint32_t x,y;
+	uint32_t x, y;
 	char * data;
 	
 	for ( x = 0; x < SPI_BUFFER_SIZE; x ++ )
@@ -451,6 +463,7 @@ void copy_spi_buffer( char * spi_buf )
 		{
 			x = x;
 		}
+
 		else
 		{
 
@@ -459,7 +472,9 @@ void copy_spi_buffer( char * spi_buf )
 				send_buffer[send_buffer_length] = data[y];
 				send_buffer_length ++;
 			}
+		
 		}
+	
 	}
 
 	send_buffer[send_buffer_length] = COMMA;
@@ -471,9 +486,8 @@ void print_spi_buffer( char * spi_buf )
 {
 	int x, y;
 	char * data;
-		
 	fprintf( stderr, "\n" );
-
+	
 	for ( x = 0; x < SPI_BUFFER_SIZE; x ++ )
 	{
 
@@ -482,16 +496,17 @@ void print_spi_buffer( char * spi_buf )
 		{
 			x = x;
 		}
+
 		else
 		{
 
 			for ( y = 0; y < CHAR_SIZE; y ++ )
 			{
-
 				fprintf( stderr, "%c", data[y] );
-
 			}
+
 		}
+
 	}
 		
 	fprintf( stderr, "\n" );
@@ -532,14 +547,12 @@ void spi_to_binary( char * spi_buf )
 
 		if ( x > 7 )
 		{
-			// Use lsb
-			x = x;
+			x = x;	// Use lsb
 		}
 
 		else
 		{
-			// Use msb
-			x = x;
+			x = x;// Use msb
 		}
 
 	}
@@ -548,17 +561,15 @@ void spi_to_binary( char * spi_buf )
 
 void copy_digital( int pin_val )
 {
+	
 	if ( pin_val )
 	{
-		
 		send_buffer[send_buffer_length] = '1';
-
 	}
+
 	else
 	{
-
 		send_buffer[send_buffer_length] = '0';
-
 	}
 
 	send_buffer_length ++;
@@ -567,3 +578,11 @@ void copy_digital( int pin_val )
 
 }
 
+void copy_timestamp( uint64_t timestamp )
+{
+	
+	char t_stamp[32];
+	sprintf( t_stamp, "%d,", timestamp );
+	strcat( send_buffer, t_stamp );
+
+}
